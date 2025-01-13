@@ -1,6 +1,7 @@
 # Finetuning TabPFN 
 
-Heyho, this is code I use for finetuning TabPFN(v2) on **ONE** downstream tabular dataset.
+Heyho, this is code I use for finetuning [TabPFN(v2)](https://github.com/PriorLabs/TabPFN) on **ONE** downstream 
+tabular dataset.
 
 The code is optimized for usage in a larger data science pipeline (i.e., for the usage in AutoML systems such 
 as [AutoGluon](https://github.com/autogluon/autogluon)). As a result, it is surprisingly complex. 
