@@ -3,15 +3,17 @@ from __future__ import annotations
 import logging
 import random
 import time
+import warnings
 from collections.abc import Callable
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal
-import warnings
+
 import numpy as np
 import pandas as pd
 import torch
+import wandb
 from finetuning_scripts.constant_utils import (
     SupportedDevice,
     SupportedValidationMetric,
@@ -37,7 +39,11 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 warnings.filterwarnings("ignore", category=FutureWarning)
-# warnings.filterwarnings("ignore", category=UserWarning, message=".*input value tensor is non-contiguous.*")
+warnings.filterwarnings(
+    "ignore",
+    category=UserWarning,
+    message=".*input value tensor is non-contiguous.*",
+)
 
 
 def fine_tune_tabpfn(
@@ -60,6 +66,7 @@ def fine_tune_tabpfn(
     # Other
     logger_level: int = 20,
     show_training_curve: bool = False,
+    use_wandb: bool = False,
 ) -> None:
     """Fine-tune a TabPFN model.
 
@@ -96,6 +103,9 @@ def fine_tune_tabpfn(
         The logger level to use for output during fine-tuning.
     show_training_curve: bool
         If True, show a training curve plot after fine-tuning.
+    use_wandb: bool
+        If True, log the fine-tuning process to Weights & Biases.
+        Log in via the CLI if not already done: `wandb login`.
     """
     st_time = time.time()
 
@@ -124,7 +134,7 @@ def fine_tune_tabpfn(
     # Load base model
     if isinstance(path_to_base_model, str) and path_to_base_model == "auto":
         model_path = None  # type: ignore
-    model, _, checkpoint_config = load_model_criterion_config(
+    model, criterion, checkpoint_config = load_model_criterion_config(
         model_path=model_path,
         check_bar_distribution_criterion=False,
         cache_trainset_representation=False,
@@ -133,7 +143,11 @@ def fine_tune_tabpfn(
         download=True,
         model_seed=random_seed,
     )
+    model.criterion = criterion
+    checkpoint_config = checkpoint_config.__dict__
     model.to(device)
+    if use_wandb:
+        wandb.watch(model, log_freq=1, log="all")
 
     # Setup validation
     create_val_data = (X_val is None) and (y_val is None)
@@ -337,6 +351,14 @@ def fine_tune_tabpfn(
             ),
             time_left=time_left,
         )
+        if use_wandb:
+            wandb.log(
+                {
+                    "train_loss": step_results.training_loss,
+                    "val_loss": step_results.validation_loss,
+                    "grad_norm": step_results.grad_norm_before_clip,
+                },
+            )
         iter_steps_pbar.set_postfix(step_results.to_results_dict())
         step_results_over_time.append(step_results)
 
@@ -351,6 +373,7 @@ def fine_tune_tabpfn(
             break
 
     _tore_down_tuning(
+        task_type=task_type,
         step_results_over_time=step_results_over_time,
         fts=fts,
         early_stop_no_imp=early_stop_no_imp,
@@ -510,7 +533,6 @@ def _fine_tune_step(
     batch_X_test = torch.movedim(batch_X_test, 0, 1).to(device)
     batch_y_train = torch.movedim(batch_y_train, 0, 1).to(device)
     batch_y_test = torch.movedim(batch_y_test, 0, 1).to(device)
-    optimizer.zero_grad()
 
     # Forward Mixed Precision
     with autocast(device_type=device, enabled=scaler.is_enabled()):
@@ -546,6 +568,9 @@ def _fine_tune_step(
         scaler.step(optimizer)
         scaler.update()
         optimizer_step_skipped = org_scale > scaler.get_scale()
+
+        # Zero grad here due to gradient accumulation
+        optimizer.zero_grad()
 
     return FineTuneStepResults(
         training_loss=loss.item()
@@ -606,6 +631,7 @@ def _tore_down_tuning(
     st_time: float,
     step_results_over_time: list[FineTuneStepResults],
     fts: FineTuneSetup,
+    task_type: TaskType,
 ) -> None:
     # -- Early Stopping reason (after tqdm finished)
     es_reason = None
@@ -667,6 +693,14 @@ def _tore_down_tuning(
             ax=ax,
             linewidth=3,
         )
+        ax.axvline(
+            x=best_step,
+            color="red",
+            linestyle="--",
+            linewidth=2,
+            label="Best Step",
+        )
+        ax.legend(title="Legend")
 
         if fts.update_every_n_steps > 1:
             sns_plot_df = plot_df.melt(
@@ -686,5 +720,5 @@ def _tore_down_tuning(
                 linewidth=3,
             )
 
-        plt.savefig("fine_tuning_loss_plot.png")
+        plt.savefig(f"fine_tuning_loss_plot_{task_type}.png")
         plt.show()

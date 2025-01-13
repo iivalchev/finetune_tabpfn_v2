@@ -96,7 +96,18 @@ def run_modelling(
     )
 
     from finetuning_scripts.finetune_tabpfn_main import fine_tune_tabpfn
+    use_wandb = True
 
+    if use_wandb:
+        import wandb
+        wandb.init(
+            reinit=True,
+            # set the wandb project where this run will be logged
+            project="LA-TabPFN",
+            entity="lennartpurucker",
+            # track hyperparameters and run metadata
+            config={"version": "0.0.1", "finetuning_config": finetuning_config},
+        )
     save_path_to_fine_tuned_model = (
         Path(__file__).parent / f"finetuned_tabpfn_model_{task_type}.ckpt"
     )
@@ -115,6 +126,8 @@ def run_modelling(
         task_type=task_type,
         # Optional
         show_training_curve=True,
+        logger_level=0,
+        use_wandb=use_wandb,
     )
 
     # -- Run Models
