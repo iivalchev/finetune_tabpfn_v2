@@ -9,14 +9,14 @@ as [AutoGluon](https://github.com/autogluon/autogluon)). As a result, it is surp
 **Key Features:**
 * Minimal hyperparameter for tuning required, focuses only on learning rate and batch size.
 * Adaptive early stopping based on validation loss & early stopping based on a time limit
-* Logging, a basic wandb support, and offline training curve plots. 
+* Logging, basic wandb support, and offline training curve plots. 
 * Support for binary classification, multiclass classification, and regression.
 * Mixed precision training, gradient scaling + clipping, gradient accumulation.
-* Semi-well written and docstring-documented code. 
+* Semi-well-written and docstring-documented code. 
 
 **Key Limitations:**
-* A lot of code overhead for finetuning, simply because we want to use it in larger data science pipelines.
-* No general purpose solution so far. It is often tricky to get better by finetuning, and the implementation made  
+* A lot of code overhead for finetuning, simply because I want to use it in larger data science pipelines.
+* No general-purpose solution so far. It is often tricky to get better by finetuning, and the implementation made  
 a lot of assumptions for design decisions that require more research (e.g., data loader design, learning HPs, ...)
 * Generally, the finetuning on one dataset is very sensitive to the learning rate, batch size, and overfitting. 
 
