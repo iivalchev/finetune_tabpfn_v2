@@ -77,7 +77,7 @@ This code base requires at least Python 3.10.
 python -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 pip install uv
-pip install -r requirements.txt
+uv pip install -r requirements.txt
 ```
 
 ### Do you want to edit the model (for adapters)?
