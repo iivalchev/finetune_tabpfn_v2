@@ -4,7 +4,7 @@ import warnings
 from pathlib import Path
 
 import yaml
-from examples.dummy_data_utils import (
+from examples.toy_example.dummy_data_utils import (
     preprocess_dummy_data,
     toy_classification,
     toy_regression,
@@ -96,7 +96,7 @@ def run_modelling(
     )
 
     from finetuning_scripts.finetune_tabpfn_main import fine_tune_tabpfn
-    use_wandb = True
+    use_wandb = False
 
     if use_wandb:
         import wandb
