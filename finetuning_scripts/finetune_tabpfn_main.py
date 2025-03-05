@@ -14,6 +14,7 @@ import numpy as np
 import pandas as pd
 import torch
 import wandb
+
 from finetuning_scripts.constant_utils import (
     SupportedDevice,
     SupportedValidationMetric,
@@ -29,6 +30,7 @@ from schedulefree import AdamWScheduleFree
 from tabpfn.base import load_model_criterion_config
 from torch import autocast
 from torch.cuda.amp import GradScaler
+from torch.nn import DataParallel
 from tqdm import tqdm
 
 if TYPE_CHECKING:
@@ -145,6 +147,8 @@ def fine_tune_tabpfn(
     )
     model.criterion = criterion
     checkpoint_config = checkpoint_config.__dict__
+    if device.startswith('cuda') & torch.cuda.device_count() > 1:
+        model = DataParallel(model)
     model.to(device)
     if use_wandb:
         wandb.watch(model, log_freq=1, log="all")
