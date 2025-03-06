@@ -147,8 +147,10 @@ def fine_tune_tabpfn(
     )
     model.criterion = criterion
     checkpoint_config = checkpoint_config.__dict__
-    if device.startswith('cuda') and torch.cuda.device_count() > 1:
+    is_data_parallel = False
+    if device.startswith('cuda') & torch.cuda.device_count() > 1:
         model = DataParallel(model)
+        is_data_parallel = True
     model.to(device)
     if use_wandb:
         wandb.watch(model, log_freq=1, log="all")
@@ -253,7 +255,9 @@ def fine_tune_tabpfn(
         ),
     )
     torch.save(
-        dict(state_dict=model.state_dict(), config=checkpoint_config),
+        dict(
+            state_dict=model.module.state_dict() if is_data_parallel else model.state_dict(),
+            config=checkpoint_config),
         str(save_path_to_fine_tuned_model),
     )
     logger.debug(f"Initial validation loss: {best_validation_loss}")
@@ -329,7 +333,9 @@ def fine_tune_tabpfn(
             if is_best:
                 best_validation_loss = validation_loss
                 torch.save(
-                    dict(state_dict=model.state_dict(), config=checkpoint_config),
+                    dict(
+                        state_dict=model.module.state_dict() if is_data_parallel else model.state_dict(),
+                        config=checkpoint_config),
                     str(save_path_to_fine_tuned_model),
                 )
         else:
