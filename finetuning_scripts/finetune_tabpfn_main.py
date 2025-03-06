@@ -147,7 +147,7 @@ def fine_tune_tabpfn(
     )
     model.criterion = criterion
     checkpoint_config = checkpoint_config.__dict__
-    if device.startswith('cuda') & torch.cuda.device_count() > 1:
+    if device.startswith('cuda') and torch.cuda.device_count() > 1:
         model = DataParallel(model)
     model.to(device)
     if use_wandb:
