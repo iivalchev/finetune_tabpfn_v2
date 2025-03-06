@@ -148,7 +148,7 @@ def fine_tune_tabpfn(
     model.criterion = criterion
     checkpoint_config = checkpoint_config.__dict__
     is_data_parallel = False
-    if device.startswith('cuda') & torch.cuda.device_count() > 1:
+    if device.startswith('cuda') and torch.cuda.device_count() > 1:
         model = DataParallel(model)
         is_data_parallel = True
     model.to(device)
