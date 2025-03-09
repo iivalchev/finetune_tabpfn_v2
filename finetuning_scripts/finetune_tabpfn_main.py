@@ -8,7 +8,7 @@ from collections.abc import Callable
 from copy import deepcopy
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, Union, Sequence
 
 import numpy as np
 import pandas as pd
@@ -62,6 +62,8 @@ def fine_tune_tabpfn(
     categorical_features_index: list[int] | None,
     task_type: TaskType,
     device: SupportedDevice,
+    use_multiple_gpus: bool = False,
+    multiple_device_ids: Sequence[Union[int, torch.device]] | None  = None,
     X_val: pd.DataFrame | None = None,
     y_val: pd.Series | None = None,
     random_seed: int = 42,
@@ -99,6 +101,11 @@ def fine_tune_tabpfn(
         The task type of the problem.
     device: SupportedDevice
         The device to use for fine-tuning.
+    use_multiple_gpus: bool
+        If True, will use multiple GPUs for fine-tuning.
+    multiple_device_ids: Sequence[Union[int, torch.device]] | None
+        GPU ids to use when use_multiple_gpus is True.
+        Will use all available GPUs if None.
     random_seed: int
         The random seed to control the randomness.
     logger_level: int
@@ -148,8 +155,8 @@ def fine_tune_tabpfn(
     model.criterion = criterion
     checkpoint_config = checkpoint_config.__dict__
     is_data_parallel = False
-    if device.startswith('cuda') and torch.cuda.device_count() > 1:
-        model = DataParallel(model)
+    if device == 'cuda' and use_multiple_gpus and torch.cuda.device_count() > 1:
+        model = DataParallel(model, device_ids=multiple_device_ids)
         is_data_parallel = True
     model.to(device)
     if use_wandb:
