@@ -7,6 +7,8 @@ import torch
 from sklearn.model_selection import KFold, StratifiedKFold
 from torch.utils.data import DataLoader, Dataset
 
+RANDOM_SEED = 4213
+
 if TYPE_CHECKING:
     import pandas as pd
 
@@ -51,9 +53,9 @@ class TabularDataset(Dataset):
             y_train=y_train,
             cross_val_splits=cross_val_splits,
             stratify_split=is_classification,
-            seed=4213,
+            seed=RANDOM_SEED,
         )
-        self._rng = np.random.RandomState(4123)
+        self._rng = np.random.RandomState(RANDOM_SEED)
 
     @staticmethod
     def splits_generator(
@@ -78,6 +80,21 @@ class TabularDataset(Dataset):
                 y=y_train.cpu().detach().numpy() if stratify_split else None,
             )
             yield from splits
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        del state["_splits_generator"]
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._splits_generator = self.splits_generator(
+            X_train=self.X_train,
+            y_train=self.y_train,
+            cross_val_splits=self.cross_val_splits,
+            stratify_split=self.is_classification,
+            seed=RANDOM_SEED,
+        )
 
     def __len__(self):
         return self.max_steps
