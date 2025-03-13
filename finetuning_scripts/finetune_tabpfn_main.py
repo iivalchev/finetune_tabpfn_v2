@@ -143,6 +143,8 @@ def fine_tune_tabpfn(
     # Load base model
     if isinstance(path_to_base_model, str) and path_to_base_model == "auto":
         model_path = None  # type: ignore
+    else:
+        model_path = path_to_base_model
     model, criterion, checkpoint_config = load_model_criterion_config(
         model_path=model_path,
         check_bar_distribution_criterion=False,
