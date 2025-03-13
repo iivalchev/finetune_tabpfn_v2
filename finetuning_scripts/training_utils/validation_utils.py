@@ -58,6 +58,7 @@ def validate_tabpfn(
     model_forward_fn: Callable,
     task_type: TaskType,
     device: SupportedDevice,
+    return_y_pred_proba: bool = False,
 ) -> float:
     """Validate the TabPFN model and return a loss (lower is better).
 
@@ -116,5 +117,8 @@ def validate_tabpfn(
     y_train.cpu()
     X_val.cpu()
     y_val.cpu()
+
+    if return_y_pred_proba:
+        return validation_metric.convert_score_to_error(score=score), y_pred
 
     return validation_metric.convert_score_to_error(score=score)

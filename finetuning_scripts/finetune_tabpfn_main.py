@@ -9,6 +9,8 @@ from copy import deepcopy
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Union, Sequence
+from copy import  deepcopy
+from autogluon.core.utils.early_stopping import ESWrapperOOF
 
 import numpy as np
 import pandas as pd
@@ -71,6 +73,11 @@ def fine_tune_tabpfn(
     logger_level: int = 20,
     show_training_curve: bool = False,
     use_wandb: bool = False,
+    # More Data
+    X_test: pd.DataFrame | None = None,
+    y_test: pd.Series | None = None,
+    X_unbiased_val: pd.DataFrame | None = None,
+    y_unbiased_val: pd.Series | None = None,
 ) -> None:
     """Fine-tune a TabPFN model.
 
@@ -121,7 +128,16 @@ def fine_tune_tabpfn(
     # Control logging
     logger.setLevel(logger_level)
     disable_progress_bar = logger_level >= 20
+    # Create a console handler with DEBUG level
+    ch = logging.StreamHandler()
+    ch.setLevel(logger_level)
 
+    # Optional: add a formatter
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    ch.setFormatter(formatter)
+
+    # Add the handler to the logger
+    logger.addHandler(ch)
     # Control randomness
     rng = np.random.RandomState(random_seed)
     torch.manual_seed(random_seed)
@@ -231,14 +247,64 @@ def fine_tune_tabpfn(
         model_forward_fn=model_forward_fn,
         task_type=task_type,
         device=device,
+        return_y_pred_proba=True,
     )
+    context_X = pd.concat([X_train, X_val], axis=0)
+    context_y = pd.concat([y_train, y_val], axis=0)
+    unbiased_validate_tabpfn_fn = partial(
+        validate_tabpfn,
+        X_train=torch.tensor(context_X.values)
+        .reshape(context_X.shape[0], 1, context_X.shape[1])
+        .float(),
+        y_train=torch.tensor(context_y.values).reshape(context_y.shape[0], 1, 1).float(),
+        X_val=torch.tensor(X_unbiased_val.values)
+        .reshape(X_unbiased_val.shape[0], 1, X_unbiased_val.shape[1])
+        .float(),
+        y_val=torch.tensor(y_unbiased_val.values).reshape(y_unbiased_val.shape[0], 1, 1).float(),
+        validation_metric=validation_metric,
+        model_forward_fn=model_forward_fn,
+        task_type=task_type,
+        device=device,
+    )
+    test_tabpfn_fn = partial(
+        validate_tabpfn,
+        X_train=torch.tensor(context_X.values)
+        .reshape(context_X.shape[0], 1, context_X.shape[1])
+        .float(),
+        y_train=torch.tensor(context_y.values).reshape(context_y.shape[0], 1, 1).float(),
+        X_val=torch.tensor(X_test.values)
+        .reshape(X_test.shape[0], 1, X_test.shape[1])
+        .float(),
+        y_val=torch.tensor(y_test.values).reshape(y_test.shape[0], 1, 1).float(),
+        validation_metric=validation_metric,
+        model_forward_fn=model_forward_fn,
+        task_type=task_type,
+        device=device,
+    )
+
+    # es_wrapper = ESWrapper(es=deepcopy(adaptive_es), score_func=validation_metric, best_is_later_if_tie=True)
+    es_wrapper_oof = ESWrapperOOF(es=deepcopy(adaptive_es), score_func=validation_metric,
+                                      best_is_later_if_tie=True, problem_type=task_type,
+                                      use_ts={           "split_method": "25r2f",
+                "es_method": "fast",
+                "reshuffle_per_fold": False,
+            },
+                                      model_name=None,debug=True)
+
     model.eval()
     optimizer.eval()
     with torch.no_grad():
-        best_validation_loss = validate_tabpfn_fn(
+        best_validation_loss, y_pred_proba_val = validate_tabpfn_fn(
             model=model,
         )  # Initial validation loss
+        unbiased_validation_loss = unbiased_validate_tabpfn_fn(
+            model=model,
+        )
+        test_loss = test_tabpfn_fn(
+            model=model,
+        )
     adaptive_es.update(cur_round=0, is_best=True)
+    es_wrapper_oof.update(y=y_val, y_score=y_pred_proba_val, cur_round=0, y_pred_proba=y_pred_proba_val)
 
     # Setup step results trace
     step_results_over_time = []
@@ -251,6 +317,9 @@ def fine_tune_tabpfn(
             ),
             training_loss=0.0,
             validation_loss=best_validation_loss,
+            unbiased_validation_loss=unbiased_validation_loss,
+            test_loss=test_loss,
+            oof_es_val_loss=validation_metric.convert_score_to_error(es_wrapper_oof.early_stop_oof_score_over_time[-1]),
             patience_left=adaptive_es.remaining_patience(cur_round=0),
             time_left=time_limit,
             device_utilization=torch.cuda.utilization(device=device)
@@ -290,6 +359,7 @@ def fine_tune_tabpfn(
 
     # Fine-Tuning Loop
     early_stop_no_imp = False
+    early_stop_no_imp_default = False
     early_stop_no_time = False
     gradient_accumulation_steps = (
         fts.update_every_n_steps if fts.update_every_n_steps > 1 else None
@@ -329,14 +399,19 @@ def fine_tune_tabpfn(
             model.eval()
             optimizer.eval()
             with torch.no_grad():
-                validation_loss = validate_tabpfn_fn(model=model)
+                validation_loss, y_pred_proba_val = validate_tabpfn_fn(model=model)
+                unbiased_validation_loss = unbiased_validate_tabpfn_fn(model=model)
+                test_loss = test_tabpfn_fn(model=model)
 
             # -- Check tuning state
             is_best = validation_loss < best_validation_loss
-            early_stop_no_imp = adaptive_es.update(
-                cur_round=(step_i - skipped_steps) // fts.update_every_n_steps,
-                is_best=is_best,
-            )
+            if not early_stop_no_imp_default:
+                early_stop_no_imp_default = adaptive_es.update(
+                    cur_round=(step_i - skipped_steps) // fts.update_every_n_steps,
+                    is_best=is_best,
+                )
+            es_oof_output = es_wrapper_oof.update(y=y_val, y_score=y_pred_proba_val, cur_round=(step_i - skipped_steps) // fts.update_every_n_steps, y_pred_proba=y_pred_proba_val)
+            early_stop_no_imp = early_stop_no_imp_default and es_oof_output.early_stop
             if is_best:
                 best_validation_loss = validation_loss
                 torch.save(
@@ -347,7 +422,9 @@ def fine_tune_tabpfn(
                 )
         else:
             validation_loss = step_results_over_time[-1].validation_loss
-            early_stop_no_imp = False
+            unbiased_validation_loss = step_results_over_time[-1].unbiased_validation_loss
+            test_loss = step_results_over_time[-1].test_loss
+
 
         time_spent = time.time() - st_time
         time_left = time_limit - time_spent
@@ -359,6 +436,10 @@ def fine_tune_tabpfn(
         step_results = step_results.register_meta_state(
             step_index=step_i,
             validation_loss=validation_loss,
+            unbiased_validation_loss=unbiased_validation_loss,
+            test_loss=test_loss,
+            oof_es_val_loss=validation_metric.convert_score_to_error(es_wrapper_oof.early_stop_oof_score_over_time[-1]),
+
             best_validation_loss=best_validation_loss,
             best_validation_score=validation_metric.convert_error_to_score(
                 best_validation_loss,
@@ -398,6 +479,8 @@ def fine_tune_tabpfn(
         show_training_curve=show_training_curve,
         st_time=st_time,
     )
+
+    return step_results_over_time
 
 
 def _model_forward(
@@ -692,16 +775,20 @@ def _tore_down_tuning(
                 "train_loss": train_loss_over_time,
                 "raw_train_loss": raw_train_loss_over_time,
                 "validation_loss": validation_loss_over_time,
+                "test_loss": [step.test_loss for step in step_results_over_time],
+                "unbiased_validation_loss": [step.unbiased_validation_loss for step in step_results_over_time],
+                "oof_es_val_loss": [step.oof_es_val_loss for step in step_results_over_time],
                 "step": range(len(train_loss_over_time)),
             },
         )
         sns_plot_df = plot_df.melt(
             id_vars="step",
-            value_vars=["train_loss", "validation_loss"],
+            value_vars=["train_loss", "validation_loss", "test_loss", "unbiased_validation_loss", "oof_es_val_loss"],
             var_name="loss_type",
             value_name="loss",
         )
-        fig, ax = plt.subplots(figsize=(8, 8))
+
+        fig, ax = plt.subplots(figsize=(8, 8), dpi=500)
         ax = sns.lineplot(
             data=sns_plot_df,
             x="step",

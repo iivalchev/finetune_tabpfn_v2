@@ -37,6 +37,9 @@ class FineTuneStepResults:
     """The remaining time left for fine-tuning."""
     validation_loss: float | None = None
     """The validation loss of the current step."""
+    unbiased_validation_loss: float | None = None
+    test_loss: float | None = None
+    oof_es_val_loss: float | None = None
 
     def register_meta_state(
         self,
@@ -47,6 +50,9 @@ class FineTuneStepResults:
         patience_left: int,
         time_left: float,
         validation_loss: float,
+        unbiased_validation_loss: float,
+        test_loss: float,
+            oof_es_val_loss
     ) -> FineTuneStepResults:
         self.step_index = step_index
         self.best_validation_loss = best_validation_loss
@@ -54,6 +60,9 @@ class FineTuneStepResults:
         self.patience_left = patience_left
         self.time_left = time_left
         self.validation_loss = validation_loss
+        self.unbiased_validation_loss = unbiased_validation_loss
+        self.test_loss = test_loss
+        self.oof_es_val_loss = oof_es_val_loss
         return self
 
     def to_results_dict(self) -> dict:
