@@ -200,7 +200,7 @@ def fine_tune_tabpfn(
 
     # Setup Forward Pass Function
     categorical_features_index = (
-        [torch.tensor(i).reshape(-1, 1).to(device) for i in categorical_features_index]
+        [int(i) for i in categorical_features_index]
         if categorical_features_index is not None
         else None
     )
