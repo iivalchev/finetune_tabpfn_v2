@@ -27,7 +27,7 @@ from finetuning_scripts.metric_utils.ag_metrics import get_metric
 from finetuning_scripts.training_utils.ag_early_stopping import AdaptiveES
 from finetuning_scripts.training_utils.data_utils import get_data_loader
 from finetuning_scripts.training_utils.training_loss import compute_loss, get_loss
-from finetuning_scripts.training_utils.validation_utils import validate_tabpfn
+from finetuning_scripts.training_utils.validation_utils import validate_tabpfn as _validate_tabpfn
 from schedulefree import AdamWScheduleFree
 from tabpfn.base import load_model_criterion_config
 from torch import autocast
@@ -214,7 +214,7 @@ def fine_tune_tabpfn(
 
     # Setup Forward Pass Function
     categorical_features_index = (
-        [torch.tensor(i).reshape(-1, 1).to(device) for i in categorical_features_index]
+        [int(i) for i in categorical_features_index]
         if categorical_features_index is not None
         else None
     )
@@ -233,6 +233,8 @@ def fine_tune_tabpfn(
     # Setup validation function
     adaptive_es, optimizer = fts.adaptive_es, fts.optimizer
     validation_metric = get_metric(metric=validation_metric, problem_type=task_type)
+    validate_tabpfn = partial(_validate_tabpfn, is_data_parallel=is_data_parallel,
+        checkpoint_config=checkpoint_config,)
     validate_tabpfn_fn = partial(
         validate_tabpfn,
         X_train=torch.tensor(X_train.values)
@@ -285,14 +287,15 @@ def fine_tune_tabpfn(
     # es_wrapper = ESWrapper(es=deepcopy(adaptive_es), score_func=validation_metric, best_is_later_if_tie=True)
     es_wrapper_oof = ESWrapperOOF(es=deepcopy(adaptive_es), score_func=validation_metric,
                                       best_is_later_if_tie=True, problem_type=task_type,
-                                      use_ts={           "split_method": "25r2f",
-                "es_method": "fast",
+                                      use_ts={           "split_method": "new",
+                "es_method": "new",
                 "reshuffle_per_fold": False,
             },
                                       model_name=None,debug=True)
 
     model.eval()
-    optimizer.eval()
+    if isinstance(optimizer, AdamWScheduleFree):
+        optimizer.eval()
     with torch.no_grad():
         best_validation_loss, y_pred_proba_val = validate_tabpfn_fn(
             model=model,
@@ -372,7 +375,8 @@ def fine_tune_tabpfn(
         validate_now = (step_i + 1) % fts.validate_every_n_steps == 0
 
         model.train()
-        optimizer.train()
+        if isinstance(optimizer, AdamWScheduleFree):
+            optimizer.train()
         step_results = _fine_tune_step(
             batch_X_train=batch_data["X_train"],
             batch_X_test=batch_data["X_test"],
@@ -397,7 +401,8 @@ def fine_tune_tabpfn(
         # -- Validate & save model
         if validate_now:
             model.eval()
-            optimizer.eval()
+            if isinstance(optimizer, AdamWScheduleFree):
+                optimizer.eval()
             with torch.no_grad():
                 validation_loss, y_pred_proba_val = validate_tabpfn_fn(model=model)
                 unbiased_validation_loss = unbiased_validate_tabpfn_fn(model=model)
@@ -410,7 +415,8 @@ def fine_tune_tabpfn(
                     cur_round=(step_i - skipped_steps) // fts.update_every_n_steps,
                     is_best=is_best,
                 )
-            es_oof_output = es_wrapper_oof.update(y=y_val, y_score=y_pred_proba_val, cur_round=(step_i - skipped_steps) // fts.update_every_n_steps, y_pred_proba=y_pred_proba_val)
+            es_oof_output = es_wrapper_oof.update(y=y_val, y_score=y_pred_proba_val, cur_round=(step_i - skipped_steps) // fts.update_every_n_steps, y_pred_proba=y_pred_proba_val,
+                                                  default_early_stop=early_stop_no_imp_default)
             early_stop_no_imp = early_stop_no_imp_default and es_oof_output.early_stop
             if is_best:
                 best_validation_loss = validation_loss

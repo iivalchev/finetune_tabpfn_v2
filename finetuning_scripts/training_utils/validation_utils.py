@@ -59,64 +59,90 @@ def validate_tabpfn(
     task_type: TaskType,
     device: SupportedDevice,
     return_y_pred_proba: bool = False,
+    use_native_validation: bool = False,
+    checkpoint_config,
+    is_data_parallel,
 ) -> float:
     """Validate the TabPFN model and return a loss (lower is better).
 
     This code assumes that batch_size for validation is 1. Otherwise,
     need to write a loop, I guess?
     """
-    X_train = X_train.to(device)
-    y_train = y_train.to(device)
-    X_val = X_val.to(device)
-    y_val = y_val.to(device)
+    if use_native_validation:
+        X_train = X_train.to(device)
+        y_train = y_train.to(device)
+        X_val = X_val.to(device)
+        y_val = y_val.to(device)
 
-    pred_logits = model_forward_fn(
-        model=model,
-        X_train=X_train,
-        y_train=y_train,
-        X_test=X_val,
-        forward_for_validation=True,
-    )
+        pred_logits = model_forward_fn(
+            model=model,
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_val,
+            forward_for_validation=True,
+        )
 
-    match task_type:
-        case TaskType.REGRESSION:
-            y_pred = pred_logits.float().flatten().cpu().detach().numpy()
-            y_true = y_val.float().flatten().cpu().detach().numpy()
-        case TaskType.BINARY_CLASSIFICATION:
-            # TODO: check that this works / is exhaustive.
-            if validation_metric.needs_threshold or validation_metric.needs_proba:
-                y_pred = (
-                    torch.nn.functional.sigmoid(pred_logits[:, 0, 1])
-                    .cpu()
-                    .detach()
-                    .numpy()
-                )
-            else:
-                # Required to get the correct classes for the metrics
+        match task_type:
+            case TaskType.REGRESSION:
+                y_pred = pred_logits.float().flatten().cpu().detach().numpy()
+                y_true = y_val.float().flatten().cpu().detach().numpy()
+            case TaskType.BINARY_CLASSIFICATION:
+                # TODO: check that this works / is exhaustive.
+                if validation_metric.needs_threshold or validation_metric.needs_proba:
+                    y_pred = (
+                        torch.nn.functional.sigmoid(pred_logits[:, 0, 1])
+                        .cpu()
+                        .detach()
+                        .numpy()
+                    )
+                else:
+                    # Required to get the correct classes for the metrics
+                    y_pred = (
+                        torch.nn.functional.softmax(pred_logits[:, 0, :], dim=-1)
+                        .cpu()
+                        .detach()
+                        .numpy()
+                    )
+                y_true = y_val.long().flatten().cpu().detach().numpy()
+            case TaskType.MULTICLASS_CLASSIFICATION:
                 y_pred = (
                     torch.nn.functional.softmax(pred_logits[:, 0, :], dim=-1)
                     .cpu()
                     .detach()
                     .numpy()
                 )
-            y_true = y_val.long().flatten().cpu().detach().numpy()
-        case TaskType.MULTICLASS_CLASSIFICATION:
-            y_pred = (
-                torch.nn.functional.softmax(pred_logits[:, 0, :], dim=-1)
-                .cpu()
-                .detach()
-                .numpy()
+                y_true = y_val.long().flatten().cpu().detach().numpy()
+            case _:
+                raise ValueError(f"Task type {task_type} not supported.")
+
+        X_train.cpu()
+        y_train.cpu()
+        X_val.cpu()
+        y_val.cpu()
+
+    else:
+        from tabpfn import TabPFNClassifier
+        import os
+        import tempfile
+
+        X_train = X_train.cpu().detach().numpy()[:, 0, :]
+        y_train = y_train.long().flatten().cpu().detach().numpy()
+        X_val = X_val.cpu().detach().numpy()[:, 0, :]
+        y_true = y_val.long().flatten().cpu().detach().numpy()
+
+        categorical_features_indices = model_forward_fn.keywords["categorical_features_index"]
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            save_path = tmpdirname + os.sep + "/fine_tuned_model_val.ckpt"
+            torch.save(
+                dict(
+                    state_dict=model.module.state_dict() if is_data_parallel else model.state_dict(),
+                    config=checkpoint_config),
+                str(save_path),
             )
-            y_true = y_val.long().flatten().cpu().detach().numpy()
-        case _:
-            raise ValueError(f"Task type {task_type} not supported.")
+            clf = TabPFNClassifier(model_path=save_path,n_estimators=1, categorical_features_indices=categorical_features_indices, device="cuda")
+            y_pred = clf.fit(X_train, y_train).predict_proba(X_val)[:, 1]
 
     score = validation_metric(y_true=y_true, y_pred=y_pred)
-
-    X_train.cpu()
-    y_train.cpu()
-    X_val.cpu()
-    y_val.cpu()
 
     if return_y_pred_proba:
         return validation_metric.convert_score_to_error(score=score), y_pred
