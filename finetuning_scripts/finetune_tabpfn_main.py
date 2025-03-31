@@ -195,6 +195,7 @@ def fine_tune_tabpfn(
         model=model,
         task_type=task_type,
         is_classification=is_classification,
+        is_data_parallel=is_data_parallel,
     )
     logger.debug(fts.report_str)
 
@@ -214,6 +215,7 @@ def fine_tune_tabpfn(
         categorical_features_index=categorical_features_index,
         use_autocast=use_autocast,
         device=device,
+        is_data_parallel=is_data_parallel,
     )
 
     # Setup validation function
@@ -415,6 +417,7 @@ def _model_forward(
     forward_for_validation: bool = False,
     device: SupportedDevice,
     outer_loop_autocast: bool = False,
+    is_data_parallel: bool,
 ) -> torch.Tensor:
     """Wrapper function to perform a forward pass with a TabPFN model.
 
@@ -486,7 +489,7 @@ def _model_forward(
         if forward_for_validation:
             new_pred_logits = []
             for batch_i in range(pred_logits.shape[1]):
-                bar_dist = deepcopy(model.criterion)
+                bar_dist = deepcopy(model.module.criterion if is_data_parallel else model.criterion)
                 bar_dist.borders = (
                     bar_dist.borders * std[batch_i] + mean[batch_i]
                 ).float()
@@ -621,6 +624,7 @@ def _setup_tuning(
     model: PerFeatureTransformer,
     task_type: TaskType,
     is_classification: bool,
+    is_data_parallel: bool,
 ) -> FineTuneSetup:
     return FineTuneSetup(
         optimizer=AdamWScheduleFree(model.parameters(), lr=learning_rate),
@@ -637,7 +641,8 @@ def _setup_tuning(
         data_loader_workers=data_loader_workers,
         loss_fn=get_loss(
             task_type=task_type,
-            borders=None if is_classification else model.criterion.borders,
+            borders=None if is_classification else
+                    (model.module.criterion.borders if is_data_parallel else model.criterion.borders),
         ),
     )
 
