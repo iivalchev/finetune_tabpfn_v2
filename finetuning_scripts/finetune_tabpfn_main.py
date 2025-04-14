@@ -72,6 +72,7 @@ def fine_tune_tabpfn(
     logger_level: int = 20,
     show_training_curve: bool = False,
     use_wandb: bool = False,
+    use_sklearn_preprocessing: bool = False,
 ) -> None:
     """Fine-tune a TabPFN model.
 
@@ -116,6 +117,9 @@ def fine_tune_tabpfn(
     use_wandb: bool
         If True, log the fine-tuning process to Weights & Biases.
         Log in via the CLI if not already done: `wandb login`.
+    use_sklearn_preprocessing: bool
+        If True, will create and run TabPFN default sklearn preprocessing pipeline
+        for validation metric calculation.
     """
     st_time = time.time()
 
@@ -242,6 +246,7 @@ def fine_tune_tabpfn(
         model_forward_fn=model_forward_fn,
         task_type=task_type,
         device=device,
+        use_sklearn_preprocessing=use_sklearn_preprocessing,
         save_model_fn=save_model_fn,
     )
     model.eval()

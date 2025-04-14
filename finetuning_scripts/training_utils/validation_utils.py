@@ -58,7 +58,7 @@ def validate_tabpfn(
     model_forward_fn: Callable,
     task_type: TaskType,
     device: SupportedDevice,
-    use_native_validation: bool = True,
+    use_sklearn_preprocessing: bool = False,
     save_model_fn=None
 ) -> float:
     """Validate the TabPFN model and return a loss (lower is better).
@@ -66,7 +66,37 @@ def validate_tabpfn(
     This code assumes that batch_size for validation is 1. Otherwise,
     need to write a loop, I guess?
     """
-    if use_native_validation:
+    if use_sklearn_preprocessing:
+        if save_model_fn is None:
+            raise ValueError(
+                f"Save model function is required when validating with full TabPFN preprocessing.")
+
+        from tabpfn import TabPFNClassifier, TabPFNRegressor
+        import os
+        import tempfile
+
+        X_train = X_train.cpu().detach().numpy()[:, 0, :]
+        y_train = y_train.long().flatten().cpu().detach().numpy()
+        X_val = X_val.cpu().detach().numpy()[:, 0, :]
+        y_true = y_val.long().flatten().cpu().detach().numpy()
+
+        categorical_features_indices = model_forward_fn.keywords[
+            "categorical_features_index"]
+
+        with tempfile.TemporaryDirectory() as tmp_dirname:
+            save_path = tmp_dirname + os.sep + "/fine_tuned_model_val.ckpt"
+            save_model_fn(model=model, save_path_to_fine_tuned_model=save_path)
+            estimator_type = TabPFNRegressor if task_type == TaskType.REGRESSION else TabPFNClassifier
+            # todo this is suboptimal as it will recreate the preprocessing everytime
+            # use the EnsembleConfig directly instead
+            estimator = estimator_type(model_path=save_path,
+                                       n_estimators=1,
+                                       categorical_features_indices=categorical_features_indices,
+                                       device=device).fit(X_train, y_train)
+            y_pred = estimator.predict(X_val,
+                                       output_type="mean") if task_type == TaskType.REGRESSION else estimator.predict_proba(
+                X_val)[:, 1]
+    else:
         X_train = X_train.to(device)
         y_train = y_train.to(device)
         X_val = X_val.to(device)
@@ -96,7 +126,8 @@ def validate_tabpfn(
                 else:
                     # Required to get the correct classes for the metrics
                     y_pred = (
-                        torch.nn.functional.softmax(pred_logits[:, 0, :], dim=-1)
+                        torch.nn.functional.softmax(pred_logits[:, 0, :],
+                                                    dim=-1)
                         .cpu()
                         .detach()
                         .numpy()
@@ -117,35 +148,6 @@ def validate_tabpfn(
         y_train.cpu()
         X_val.cpu()
         y_val.cpu()
-
-    else:
-        if save_model_fn is None:
-            raise ValueError(
-                f"Save model function is required when validating with full TabPFN preprocessing.")
-
-        from tabpfn import TabPFNClassifier, TabPFNRegressor
-        import os
-        import tempfile
-
-        X_train = X_train.cpu().detach().numpy()[:, 0, :]
-        y_train = y_train.long().flatten().cpu().detach().numpy()
-        X_val = X_val.cpu().detach().numpy()[:, 0, :]
-        y_true = y_val.long().flatten().cpu().detach().numpy()
-
-        categorical_features_indices = model_forward_fn.keywords[
-            "categorical_features_index"]
-
-        with tempfile.TemporaryDirectory() as tmp_dirname:
-            save_path = tmp_dirname + os.sep + "/fine_tuned_model_val.ckpt"
-            save_model_fn(model=model, save_path_to_fine_tuned_model=save_path)
-            estimator_type = TabPFNRegressor if task_type == TaskType.REGRESSION else TabPFNClassifier
-            estimator = estimator_type(model_path=save_path,
-                                       n_estimators=1,
-                                       categorical_features_indices=categorical_features_indices,
-                                       device=device).fit(X_train, y_train)
-            y_pred = estimator.predict(X_val,
-                                       output_type="mean") if task_type == TaskType.REGRESSION else estimator.predict_proba(
-                X_val)[:, 1]
 
     score = validation_metric(y_true=y_true, y_pred=y_pred)
 
