@@ -58,63 +58,95 @@ def validate_tabpfn(
     model_forward_fn: Callable,
     task_type: TaskType,
     device: SupportedDevice,
+    use_native_validation: bool = True,
+    save_model_fn=None
 ) -> float:
     """Validate the TabPFN model and return a loss (lower is better).
 
     This code assumes that batch_size for validation is 1. Otherwise,
     need to write a loop, I guess?
     """
-    X_train = X_train.to(device)
-    y_train = y_train.to(device)
-    X_val = X_val.to(device)
-    y_val = y_val.to(device)
+    if use_native_validation:
+        X_train = X_train.to(device)
+        y_train = y_train.to(device)
+        X_val = X_val.to(device)
+        y_val = y_val.to(device)
 
-    pred_logits = model_forward_fn(
-        model=model,
-        X_train=X_train,
-        y_train=y_train,
-        X_test=X_val,
-        forward_for_validation=True,
-    )
+        pred_logits = model_forward_fn(
+            model=model,
+            X_train=X_train,
+            y_train=y_train,
+            X_test=X_val,
+            forward_for_validation=True,
+        )
 
-    match task_type:
-        case TaskType.REGRESSION:
-            y_pred = pred_logits.float().flatten().cpu().detach().numpy()
-            y_true = y_val.float().flatten().cpu().detach().numpy()
-        case TaskType.BINARY_CLASSIFICATION:
-            # TODO: check that this works / is exhaustive.
-            if validation_metric.needs_threshold or validation_metric.needs_proba:
-                y_pred = (
-                    torch.nn.functional.sigmoid(pred_logits[:, 0, 1])
-                    .cpu()
-                    .detach()
-                    .numpy()
-                )
-            else:
-                # Required to get the correct classes for the metrics
+        match task_type:
+            case TaskType.REGRESSION:
+                y_pred = pred_logits.float().flatten().cpu().detach().numpy()
+                y_true = y_val.float().flatten().cpu().detach().numpy()
+            case TaskType.BINARY_CLASSIFICATION:
+                # TODO: check that this works / is exhaustive.
+                if validation_metric.needs_threshold or validation_metric.needs_proba:
+                    y_pred = (
+                        torch.nn.functional.sigmoid(pred_logits[:, 0, 1])
+                        .cpu()
+                        .detach()
+                        .numpy()
+                    )
+                else:
+                    # Required to get the correct classes for the metrics
+                    y_pred = (
+                        torch.nn.functional.softmax(pred_logits[:, 0, :], dim=-1)
+                        .cpu()
+                        .detach()
+                        .numpy()
+                    )
+                y_true = y_val.long().flatten().cpu().detach().numpy()
+            case TaskType.MULTICLASS_CLASSIFICATION:
                 y_pred = (
                     torch.nn.functional.softmax(pred_logits[:, 0, :], dim=-1)
                     .cpu()
                     .detach()
                     .numpy()
                 )
-            y_true = y_val.long().flatten().cpu().detach().numpy()
-        case TaskType.MULTICLASS_CLASSIFICATION:
-            y_pred = (
-                torch.nn.functional.softmax(pred_logits[:, 0, :], dim=-1)
-                .cpu()
-                .detach()
-                .numpy()
-            )
-            y_true = y_val.long().flatten().cpu().detach().numpy()
-        case _:
-            raise ValueError(f"Task type {task_type} not supported.")
+                y_true = y_val.long().flatten().cpu().detach().numpy()
+            case _:
+                raise ValueError(f"Task type {task_type} not supported.")
+
+        X_train.cpu()
+        y_train.cpu()
+        X_val.cpu()
+        y_val.cpu()
+
+    else:
+        if save_model_fn is None:
+            raise ValueError(
+                f"Save model function is required when validating with full TabPFN preprocessing.")
+
+        from tabpfn import TabPFNClassifier, TabPFNRegressor
+        import os
+        import tempfile
+
+        X_train = X_train.cpu().detach().numpy()[:, 0, :]
+        y_train = y_train.long().flatten().cpu().detach().numpy()
+        X_val = X_val.cpu().detach().numpy()[:, 0, :]
+        y_true = y_val.long().flatten().cpu().detach().numpy()
+
+        categorical_features_indices = model_forward_fn.keywords[
+            "categorical_features_index"]
+
+        with tempfile.TemporaryDirectory() as tmp_dirname:
+            save_path = tmp_dirname + os.sep + "/fine_tuned_model_val.ckpt"
+            save_model_fn(model=model, save_path_to_fine_tuned_model=save_path)
+            estimator_type = TabPFNRegressor if task_type == TaskType.REGRESSION else TabPFNClassifier
+            estimator = estimator_type(model_path=save_path,
+                                       n_estimators=1,
+                                       categorical_features_indices=categorical_features_indices,
+                                       device=device).fit(X_train, y_train)
+            y_pred = estimator.predict(X_val,
+                                       output_type="mean") if task_type == TaskType.REGRESSION else estimator.predict_proba(
+                X_val)[:, 1]
 
     score = validation_metric(y_true=y_true, y_pred=y_pred)
-
-    X_train.cpu()
-    y_train.cpu()
-    X_val.cpu()
-    y_val.cpu()
 
     return validation_metric.convert_score_to_error(score=score)

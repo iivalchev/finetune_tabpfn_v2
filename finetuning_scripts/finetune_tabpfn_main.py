@@ -24,6 +24,7 @@ from finetuning_scripts.data_classes import FineTuneSetup, FineTuneStepResults
 from finetuning_scripts.metric_utils.ag_metrics import get_metric
 from finetuning_scripts.training_utils.ag_early_stopping import AdaptiveES
 from finetuning_scripts.training_utils.data_utils import get_data_loader
+from finetuning_scripts.training_utils.model_utils import save_model
 from finetuning_scripts.training_utils.training_loss import compute_loss, get_loss
 from finetuning_scripts.training_utils.validation_utils import validate_tabpfn
 from schedulefree import AdamWScheduleFree
@@ -218,6 +219,12 @@ def fine_tune_tabpfn(
         is_data_parallel=is_data_parallel,
     )
 
+    save_model_fn = partial(
+        save_model,
+        checkpoint_config=checkpoint_config,
+        is_data_parallel=is_data_parallel,
+    )
+
     # Setup validation function
     adaptive_es, optimizer = fts.adaptive_es, fts.optimizer
     validation_metric = get_metric(metric=validation_metric, problem_type=task_type)
@@ -235,6 +242,7 @@ def fine_tune_tabpfn(
         model_forward_fn=model_forward_fn,
         task_type=task_type,
         device=device,
+        save_model_fn=save_model_fn,
     )
     model.eval()
     optimizer.eval()
