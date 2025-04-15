@@ -96,9 +96,9 @@ def validate_tabpfn(
             X_train = X_train.cpu().detach().numpy()[:, 0, :]
             y_train = y_train.long().flatten().cpu().detach().numpy()
             model_for_validation.fit(X_train, y_train)
-        else:
-            model_for_validation.model_ = model
-            model_for_validation.executor_.model = model
+
+        model_for_validation.model_ = model
+        model_for_validation.executor_.model = model
 
         if task_type == TaskType.REGRESSION:
             y_pred = model_for_validation.predict(X_val, output_type="mean")
