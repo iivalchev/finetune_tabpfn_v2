@@ -28,6 +28,7 @@ from finetuning_scripts.training_utils.model_utils import save_model
 from finetuning_scripts.training_utils.training_loss import compute_loss, get_loss
 from finetuning_scripts.training_utils.validation_utils import validate_tabpfn
 from schedulefree import AdamWScheduleFree
+from tabpfn import TabPFNClassifier, TabPFNRegressor
 from tabpfn.base import load_model_criterion_config
 from torch import autocast
 from torch.cuda.amp import GradScaler
@@ -73,6 +74,7 @@ def fine_tune_tabpfn(
     show_training_curve: bool = False,
     use_wandb: bool = False,
     use_sklearn_preprocessing: bool = False,
+    model_for_validation: TabPFNClassifier | TabPFNRegressor = None
 ) -> None:
     """Fine-tune a TabPFN model.
 
@@ -120,6 +122,10 @@ def fine_tune_tabpfn(
     use_sklearn_preprocessing: bool
         If True, will create and run TabPFN default sklearn preprocessing pipeline
         for validation metric calculation.
+    model_for_validation: TabPFNClassifier | TabPFNRegressor
+        Optional TabPFN model which will be used for validation if use_sklearn_preprocessing is True.
+        Tha passed model should not be fitted, it is used to configure the
+        preprocessing pipeline.
     """
     st_time = time.time()
 
@@ -223,15 +229,17 @@ def fine_tune_tabpfn(
         is_data_parallel=is_data_parallel,
     )
 
-    save_model_fn = partial(
-        save_model,
-        checkpoint_config=checkpoint_config,
-        is_data_parallel=is_data_parallel,
-    )
-
     # Setup validation function
     adaptive_es, optimizer = fts.adaptive_es, fts.optimizer
     validation_metric = get_metric(metric=validation_metric, problem_type=task_type)
+    if use_sklearn_preprocessing:
+        if model_for_validation is not None:
+            if hasattr(model_for_validation, 'executor_'):
+                raise ValueError(f"model_for_validation must NOT be fitted")
+        else:
+            model_for_validation = TabPFNRegressor() if task_type == TaskType.REGRESSION else TabPFNClassifier()
+        # this is required as memory_saving_mode can not be used during training
+        model_for_validation.memory_saving_mode = False
     validate_tabpfn_fn = partial(
         validate_tabpfn,
         X_train=torch.tensor(X_train.values)
@@ -247,7 +255,7 @@ def fine_tune_tabpfn(
         task_type=task_type,
         device=device,
         use_sklearn_preprocessing=use_sklearn_preprocessing,
-        save_model_fn=save_model_fn,
+        model_for_validation=model_for_validation
     )
     model.eval()
     optimizer.eval()

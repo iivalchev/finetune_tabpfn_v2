@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     import pandas as pd
     from finetuning_scripts.metric_utils.ag_metrics import Scorer
     from tabpfn.model.transformer import PerFeatureTransformer
+    from tabpfn import TabPFNClassifier, TabPFNRegressor
 
 
 def create_val_data(
@@ -59,7 +60,7 @@ def validate_tabpfn(
     task_type: TaskType,
     device: SupportedDevice,
     use_sklearn_preprocessing: bool = False,
-    save_model_fn=None
+    model_for_validation: TabPFNClassifier | TabPFNRegressor = None,
 ) -> float:
     """Validate the TabPFN model and return a loss (lower is better).
 
@@ -67,35 +68,44 @@ def validate_tabpfn(
     need to write a loop, I guess?
     """
     if use_sklearn_preprocessing:
-        if save_model_fn is None:
+        if model_for_validation is None:
             raise ValueError(
-                f"Save model function is required when validating with full TabPFN preprocessing.")
+                f"Model for validation is required when validating with full TabPFN preprocessing.")
+        if not model_for_validation.fit_mode == 'fit_preprocessors':
+            raise ValueError(
+                f"fit_mode for model_for_validation must be 'fit_preprocessors' when validating with full TabPFN preprocessing.")
+        if model_for_validation.memory_saving_mode:
+            raise ValueError(
+                f"memory_saving_mode for model_for_validation must be False when validating with full TabPFN preprocessing.")
+
+        estimator_type = model_for_validation.__sklearn_tags__().estimator_type
+        if task_type == TaskType.REGRESSION and not estimator_type == 'regressor':
+            raise ValueError(
+                f"model_for_validation must be TabPFNRegressor but is: {type(model_for_validation)}")
+        if task_type in {TaskType.MULTICLASS_CLASSIFICATION,
+                           TaskType.BINARY_CLASSIFICATION} and not estimator_type == 'classifier':
+            raise ValueError(
+                f"model_for_validation must be TabPFNClassifier but is: {type(model_for_validation)}")
 
         from tabpfn import TabPFNClassifier, TabPFNRegressor
-        import os
-        import tempfile
 
-        X_train = X_train.cpu().detach().numpy()[:, 0, :]
-        y_train = y_train.long().flatten().cpu().detach().numpy()
         X_val = X_val.cpu().detach().numpy()[:, 0, :]
         y_true = y_val.long().flatten().cpu().detach().numpy()
 
-        categorical_features_indices = model_forward_fn.keywords[
-            "categorical_features_index"]
+        if not hasattr(model_for_validation, 'executor_'):
+            X_train = X_train.cpu().detach().numpy()[:, 0, :]
+            y_train = y_train.long().flatten().cpu().detach().numpy()
+            model_for_validation.fit(X_train, y_train)
+        else:
+            model_for_validation.model_ = model
+            model_for_validation.executor_.model = model
 
-        with tempfile.TemporaryDirectory() as tmp_dirname:
-            save_path = tmp_dirname + os.sep + "/fine_tuned_model_val.ckpt"
-            save_model_fn(model=model, save_path_to_fine_tuned_model=save_path)
-            estimator_type = TabPFNRegressor if task_type == TaskType.REGRESSION else TabPFNClassifier
-            # todo this is suboptimal as it will recreate the preprocessing everytime
-            # use the EnsembleConfig directly instead
-            estimator = estimator_type(model_path=save_path,
-                                       n_estimators=1,
-                                       categorical_features_indices=categorical_features_indices,
-                                       device=device).fit(X_train, y_train)
-            y_pred = estimator.predict(X_val,
-                                       output_type="mean") if task_type == TaskType.REGRESSION else estimator.predict_proba(
-                X_val)[:, 1]
+        if task_type == TaskType.REGRESSION:
+            y_pred = model_for_validation.predict(X_val, output_type="mean")
+        else:
+            y_pred = model_for_validation.predict_proba(X_val)
+
+        model.to(device)
     else:
         X_train = X_train.to(device)
         y_train = y_train.to(device)
