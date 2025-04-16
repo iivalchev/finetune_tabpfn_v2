@@ -90,11 +90,11 @@ def validate_tabpfn(
         from tabpfn import TabPFNClassifier, TabPFNRegressor
 
         X_val = X_val.cpu().detach().numpy()[:, 0, :]
-        y_true = y_val.long().flatten().cpu().detach().numpy()
+        y_true = y_val.flatten().cpu().detach().numpy()
 
         if not hasattr(model_for_validation, 'executor_'):
             X_train = X_train.cpu().detach().numpy()[:, 0, :]
-            y_train = y_train.long().flatten().cpu().detach().numpy()
+            y_train = y_train.flatten().cpu().detach().numpy()
             model_for_validation.fit(X_train, y_train)
 
         model_for_validation.model_ = model
@@ -105,6 +105,7 @@ def validate_tabpfn(
         else:
             y_pred = model_for_validation.predict_proba(X_val)
 
+        # model is moved to cpu after inference by the TabPFN* models
         model.to(device)
     else:
         X_train = X_train.to(device)
