@@ -73,7 +73,7 @@ def fine_tune_tabpfn(
     logger_level: int = 20,
     show_training_curve: bool = False,
     use_wandb: bool = False,
-    use_sklearn_preprocessing: bool = False,
+    use_sklearn_interface_for_validation: bool = False,
     model_for_validation: TabPFNClassifier | TabPFNRegressor = None
 ) -> None:
     """Fine-tune a TabPFN model.
@@ -119,11 +119,11 @@ def fine_tune_tabpfn(
     use_wandb: bool
         If True, log the fine-tuning process to Weights & Biases.
         Log in via the CLI if not already done: `wandb login`.
-    use_sklearn_preprocessing: bool
+    use_sklearn_interface_for_validation: bool
         If True, will create and run TabPFN default sklearn preprocessing pipeline
         for validation metric calculation.
     model_for_validation: TabPFNClassifier | TabPFNRegressor
-        Optional TabPFN model which will be used for validation if use_sklearn_preprocessing is True.
+        Optional TabPFN model which will be used for validation if use_sklearn_interface_for_validation is True.
         Tha passed model should not be fitted, it is used to configure the
         preprocessing pipeline.
     """
@@ -232,7 +232,7 @@ def fine_tune_tabpfn(
     # Setup validation function
     adaptive_es, optimizer = fts.adaptive_es, fts.optimizer
     validation_metric = get_metric(metric=validation_metric, problem_type=task_type)
-    if use_sklearn_preprocessing:
+    if use_sklearn_interface_for_validation:
         if model_for_validation is not None:
             if hasattr(model_for_validation, 'executor_'):
                 raise ValueError(f"model_for_validation must NOT be fitted")
@@ -254,7 +254,7 @@ def fine_tune_tabpfn(
         model_forward_fn=model_forward_fn,
         task_type=task_type,
         device=device,
-        use_sklearn_preprocessing=use_sklearn_preprocessing,
+        use_sklearn_interface_for_validation=use_sklearn_interface_for_validation,
         model_for_validation=model_for_validation
     )
     model.eval()

@@ -59,7 +59,7 @@ def validate_tabpfn(
     model_forward_fn: Callable,
     task_type: TaskType,
     device: SupportedDevice,
-    use_sklearn_preprocessing: bool = False,
+    use_sklearn_interface_for_validation: bool = False,
     model_for_validation: TabPFNClassifier | TabPFNRegressor = None,
 ) -> float:
     """Validate the TabPFN model and return a loss (lower is better).
@@ -67,7 +67,7 @@ def validate_tabpfn(
     This code assumes that batch_size for validation is 1. Otherwise,
     need to write a loop, I guess?
     """
-    if use_sklearn_preprocessing:
+    if use_sklearn_interface_for_validation:
         if model_for_validation is None:
             raise ValueError(
                 f"Model for validation is required when validating with full TabPFN preprocessing.")
